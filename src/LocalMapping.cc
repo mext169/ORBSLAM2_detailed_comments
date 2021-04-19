@@ -79,7 +79,7 @@ void LocalMapping::Run()
     {
         // Tracking will see that Local Mapping is busy
         // Step 1 告诉Tracking，LocalMapping正处于繁忙状态，请不要给我发送关键帧打扰我
-        // LocalMapping线程处理的关键帧都是Tracking线程发过的
+        // LocalMapping线程处理的关键帧都是Tracking线程发来的
         SetAcceptKeyFrames(false);
 
         // Check if there are keyframes in the queue
@@ -194,7 +194,7 @@ void LocalMapping::ProcessNewKeyFrame()
     }
 
     // Compute Bags of Words structures
-    // Step 2：计算该关键帧特征点的Bow信息
+    // Step 2：计算该关键帧特征点的词袋向量
     mpCurrentKeyFrame->ComputeBoW();
 
     // Associate MapPoints to the new keyframe and update normal and descriptor
@@ -211,7 +211,7 @@ void LocalMapping::ProcessNewKeyFrame()
             {
                 if(!pMP->IsInKeyFrame(mpCurrentKeyFrame))
                 {
-                    // 如果地图点不是来自当前帧的观测，为当前地图点添加观测
+                    // 如果地图点不是来自当前帧的观测（比如来自局部地图点），为当前地图点添加观测
                     pMP->AddObservation(mpCurrentKeyFrame, i);
                     // 获得该点的平均观测方向和观测距离范围
                     pMP->UpdateNormalAndDepth();
@@ -256,18 +256,18 @@ void LocalMapping::MapPointCulling()
         nThObs = 3;
     const int cnThObs = nThObs;
 	
-	// Step 2：遍历检查的新添加的MapPoints
+	// Step 2：遍历检查新添加的地图点
     while(lit!=mlpRecentAddedMapPoints.end())
     {
         MapPoint* pMP = *lit;
         if(pMP->isBad())
         {
-            // Step 2.1：已经是坏点的MapPoints直接从检查链表中删除
+            // Step 2.1：已经是坏点的地图点仅从队列中删除
             lit = mlpRecentAddedMapPoints.erase(lit);
         }
         else if(pMP->GetFoundRatio()<0.25f)
         {
-            // Step 2.2：跟踪到该MapPoint的Frame数相比预计可观测到该MapPoint的Frame数的比例小于25%，删除
+            // Step 2.2：跟踪到该地图点的帧数相比预计可观测到该地图点的帧数的比例小于25%，从地图中删除
             // (mnFound/mnVisible） < 25%
             // mnFound ：地图点被多少帧（包括普通帧）看到，次数越多越好
             // mnVisible：地图点应该被看到的次数
@@ -278,13 +278,13 @@ void LocalMapping::MapPointCulling()
         else if(((int)nCurrentKFid-(int)pMP->mnFirstKFid)>=2 && pMP->Observations()<=cnThObs)
         {
             // Step 2.3：从该点建立开始，到现在已经过了不小于2个关键帧
-            // 但是观测到该点的关键帧数却不超过cnThObs帧，那么删除该点
+            // 但是观测到该点的相机数却不超过阈值cnThObs，从地图中删除
             pMP->SetBadFlag();
             lit = mlpRecentAddedMapPoints.erase(lit);
         }
         else if(((int)nCurrentKFid-(int)pMP->mnFirstKFid)>=3)
             // Step 2.4：从建立该点开始，已经过了3个关键帧而没有被剔除，则认为是质量高的点
-            // 因此没有SetBadFlag()，仅从队列中删除，放弃继续对该MapPoint的检测
+            // 因此没有SetBadFlag()，仅从队列中删除
             lit = mlpRecentAddedMapPoints.erase(lit);
         else
             lit++;
@@ -335,17 +335,17 @@ void LocalMapping::CreateNewMapPoints()
     int nnew=0;
 
     // Search matches with epipolar restriction and triangulate
-    // Step 2：遍历相邻关键帧vpNeighKFs
+    // Step 2：遍历相邻关键帧，搜索匹配并用极线约束剔除误匹配，最终三角化
     for(size_t i=0; i<vpNeighKFs.size(); i++)
     {
-        // 下面的过程会比较耗费时间,因此如果有新的关键帧需要处理的话,就先去处理新的关键帧吧
+        // ! 疑似bug，正确应该是 if(i>0 && !CheckNewKeyFrames())
         if(i>0 && CheckNewKeyFrames())
             return;
 
         KeyFrame* pKF2 = vpNeighKFs[i];
 
         // Check first that baseline is not too short
-        // 邻接的关键帧光心在世界坐标系中的坐标
+        // 相邻的关键帧光心在世界坐标系中的坐标
         cv::Mat Ow2 = pKF2->GetCameraCenter();
         // 基线向量，两个关键帧间的相机位移
         cv::Mat vBaseline = Ow2-Ow1;
@@ -363,9 +363,9 @@ void LocalMapping::CreateNewMapPoints()
         else    
         {
             // 单目相机情况
-            // 邻接关键帧的场景深度中值
+            // 相邻关键帧的场景深度中值
             const float medianDepthKF2 = pKF2->ComputeSceneMedianDepth(2);
-            // baseline与景深的比例
+            // 基线与景深的比例
             const float ratioBaselineDepth = baseline/medianDepthKF2;
             // 如果比例特别小，基线太短恢复3D点不准，那么跳过当前邻接的关键帧，不生成3D点
             if(ratioBaselineDepth<0.01)
@@ -377,7 +377,7 @@ void LocalMapping::CreateNewMapPoints()
         cv::Mat F12 = ComputeF12(mpCurrentKeyFrame,pKF2);
 
         // Search matches that fullfil epipolar constraint
-        // Step 5：通过BoW对两关键帧的未匹配的特征点快速匹配，用极线约束抑制离群点，生成新的匹配点对
+        // Step 5：通过词袋对两关键帧的未匹配的特征点快速匹配，用极线约束抑制离群点，生成新的匹配点对
         vector<pair<size_t,size_t> > vMatchedIndices;
         matcher.SearchForTriangulation(mpCurrentKeyFrame,pKF2,F12,vMatchedIndices,false);
 
@@ -429,33 +429,32 @@ void LocalMapping::CreateNewMapPoints()
             // 由相机坐标系转到世界坐标系(得到的是那条反投影射线的一个同向向量在世界坐标系下的表示,还是只能够表示方向)，得到视差角余弦值
             cv::Mat ray1 = Rwc1*xn1;
             cv::Mat ray2 = Rwc2*xn2;
-            // 这个就是求向量之间角度公式
+            // 匹配点射线夹角余弦值
             const float cosParallaxRays = ray1.dot(ray2)/(cv::norm(ray1)*cv::norm(ray2));
 
             // 加1是为了让cosParallaxStereo随便初始化为一个很大的值
             float cosParallaxStereo = cosParallaxRays+1;  
+            // cosParallaxStereo1、cosParallaxStereo2在后面可能不存在，需要初始化为较大的值
             float cosParallaxStereo1 = cosParallaxStereo;
             float cosParallaxStereo2 = cosParallaxStereo;
 
             // Step 6.3：对于双目，利用双目得到视差角；单目相机没有特殊操作
             if(bStereo1)
                 // 传感器是双目相机,并且当前的关键帧的这个点有对应的深度
-                // 假设是平行的双目相机，计算出两个相机观察这个点的时候的视差角;
-                // ? 感觉直接使用向量夹角的方式计算会准确一些啊（双目的时候），那么为什么不直接使用那个呢？
-                // 回答：因为双目深度值、基线是更可靠的，比特征匹配再三角化出来的稳
+                // 假设是平行的双目相机，计算出双目相机观察这个点的时候的视差角余弦
                 cosParallaxStereo1 = cos(2*atan2(mpCurrentKeyFrame->mb/2,mpCurrentKeyFrame->mvDepth[idx1]));
             else if(bStereo2)
-                //传感器是双目相机,并且邻接的关键帧的这个点有对应的深度，和上面一样操作
+                // 传感器是双目相机,并且邻接的关键帧的这个点有对应的深度，和上面一样操作
                 cosParallaxStereo2 = cos(2*atan2(pKF2->mb/2,pKF2->mvDepth[idx2]));
             
-            // 得到双目观测的视差角
+            // 得到双目观测的视差角中最小的那个
             cosParallaxStereo = min(cosParallaxStereo1,cosParallaxStereo2);
 
             // Step 6.4：三角化恢复3D点
             cv::Mat x3D;
             // cosParallaxRays>0 && (bStereo1 || bStereo2 || cosParallaxRays<0.9998)表明视差角正常,0.9998 对应1°
-            // cosParallaxRays < cosParallaxStereo 表明视差角很小
-            // ?视差角度小时用三角法恢复3D点，视差角大时用双目恢复3D点（双目以及深度有效）
+            // cosParallaxRays < cosParallaxStereo 表明匹配点对夹角大于双目本身观察三维点夹角
+            // 匹配点对夹角大，用三角法恢复3D点
             // 参考：https://github.com/raulmur/ORB_SLAM2/issues/345
             if(cosParallaxRays<cosParallaxStereo && cosParallaxRays>0 && (bStereo1 || bStereo2 || cosParallaxRays<0.9998))
             {
@@ -477,6 +476,7 @@ void LocalMapping::CreateNewMapPoints()
                 // 归一化成为齐次坐标,然后提取前面三个维度作为欧式坐标
                 x3D = x3D.rowRange(0,3)/x3D.at<float>(3);
             }
+            // 匹配点对夹角小，用双目恢复3D点
             else if(bStereo1 && cosParallaxStereo1<cosParallaxStereo2)  
             {
                 // 如果是双目，用视差角更大的那个双目信息来恢复，直接用已知3D点反投影了
@@ -617,7 +617,7 @@ void LocalMapping::CreateNewMapPoints()
 }
 
 /**
- * @brief 检查并融合当前关键帧与相邻帧（两级相邻）重复的MapPoints
+ * @brief 检查并融合当前关键帧与相邻帧（两级相邻）重复的地图点
  * 
  */
 void LocalMapping::SearchInNeighbors()
@@ -628,7 +628,7 @@ void LocalMapping::SearchInNeighbors()
     // 当前关键帧的邻接关键帧，称为一级相邻关键帧，也就是邻居
     // 与一级相邻关键帧相邻的关键帧，称为二级相邻关键帧，也就是邻居的邻居
 
-    // 单目情况要10个邻接关键帧，双目或者RGBD则要20个
+    // 单目情况要20个邻接关键帧，双目或者RGBD则要10个
     int nn = 10;
     if(mbMonocular)
         nn=20;
@@ -669,7 +669,7 @@ void LocalMapping::SearchInNeighbors()
     // 使用默认参数, 最优和次优比例0.6,匹配时检查特征点的旋转
     ORBmatcher matcher;
 
-    // Step 3：将当前帧的地图点分别与一级二级相邻关键帧地图点进行融合 -- 正向
+    // Step 3：将当前帧的地图点分别投影到两级相邻关键帧，寻找匹配点对应的地图点进行融合，称为正向投影融合
     vector<MapPoint*> vpMapPointMatches = mpCurrentKeyFrame->GetMapPointMatches();
     for(vector<KeyFrame*>::iterator vit=vpTargetKFs.begin(), vend=vpTargetKFs.end(); vit!=vend; vit++)
     {
@@ -683,7 +683,7 @@ void LocalMapping::SearchInNeighbors()
     }
 
     // Search matches by projection from target KFs in current KF
-    // Step 4：将一级二级相邻关键帧地图点分别与当前关键帧地图点进行融合 -- 反向
+    // Step 4：将两级相邻关键帧地图点分别投影到当前关键帧，寻找匹配点对应的地图点进行融合，称为反向投影融合
     // 用于进行存储要融合的一级邻接和二级邻接关键帧所有MapPoints的集合
     vector<MapPoint*> vpFuseCandidates;
     vpFuseCandidates.reserve(vpTargetKFs.size()*vpMapPointMatches.size());
@@ -715,7 +715,7 @@ void LocalMapping::SearchInNeighbors()
     matcher.Fuse(mpCurrentKeyFrame,vpFuseCandidates);
 
     // Update points
-    // Step 5：更新当前帧地图点的描述子、深度、观测主方向等属性
+    // Step 5：更新当前帧地图点的描述子、深度、平均观测方向等属性
     vpMapPointMatches = mpCurrentKeyFrame->GetMapPointMatches();
     for(size_t i=0, iend=vpMapPointMatches.size(); i<iend; i++)
     {
@@ -734,8 +734,7 @@ void LocalMapping::SearchInNeighbors()
     }
 
     // Update connections in covisibility graph
-    // Step 6：更新当前帧的MapPoints后更新与其它帧的连接关系
-    // 更新covisibility图
+    // Step 6：更新当前帧与其它帧的共视连接关系
     mpCurrentKeyFrame->UpdateConnections();
 }
 
@@ -802,7 +801,6 @@ bool LocalMapping::stopRequested()
 }
 
 // 释放当前还在缓冲区中的关键帧指针
-//? ! 现在感觉之前的理解好像有问题,这个函数由LoopClosing在执行了回环的关键帧组优化之后调用的,是为了恢复LoopMapping线程的正常工作的
 void LocalMapping::Release()
 {
     unique_lock<mutex> lock(mMutexStop);
@@ -883,6 +881,7 @@ void LocalMapping::KeyFrameCulling()
     for(vector<KeyFrame*>::iterator vit=vpLocalKeyFrames.begin(), vend=vpLocalKeyFrames.end(); vit!=vend; vit++)
     {
         KeyFrame* pKF = *vit;
+        // 第1个关键帧不能删除，跳过
         if(pKF->mnId==0)
             continue;
         // Step 2：提取每个共视关键帧的地图点
@@ -897,7 +896,7 @@ void LocalMapping::KeyFrameCulling()
                                                                                       
         int nMPs=0;            
 
-        // Step 3：遍历该共视关键帧的所有地图点，判断是否90%以上的地图点能被其它至少3个关键帧（同样或者更低层级）观测到
+        // Step 3：遍历该共视关键帧的所有地图点，其中能被其它至少3个关键帧观测到的地图点为冗余地图点
         for(size_t i=0, iend=vpMapPoints.size(); i<iend; i++)
         {
             MapPoint* pMP = vpMapPoints[i];
@@ -907,7 +906,7 @@ void LocalMapping::KeyFrameCulling()
                 {
                     if(!mbMonocular)
                     {
-                        // 对于双目，仅考虑近处（不超过基线的 35倍 ）的地图点
+                        // 对于双目或RGB-D，仅考虑近处（不超过基线的40倍 ）的地图点
                         if(pKF->mvDepth[i]>pKF->mThDepth || pKF->mvDepth[i]<0)
                             continue;
                     }
@@ -949,7 +948,7 @@ void LocalMapping::KeyFrameCulling()
             }
         }
 
-        // Step 4：该关键帧90%以上的有效地图点被判断为冗余的，则删除该关键帧
+        // Step 4：如果该关键帧90%以上的有效地图点被判断为冗余的，则认为该关键帧是冗余的，需要删除该关键帧
         if(nRedundantObservations>0.9*nMPs)
             pKF->SetBadFlag();
     }
